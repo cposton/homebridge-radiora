@@ -104,30 +104,21 @@ class RadioRAItem {
   constructor(log, item, platform) {
     // device info
     this.name = item.name;
-    this.lastBrightness = 100;
+    this.lastPosition = 100;
     this.model = 'RadioRA';
     this.deviceId = item.id;
     this.serial = item.serial;
-    this.isSwitch = item.type === 'switch';
     this.log = log;
     this.platform = platform;
   }
 
   get(type, callback) {
     switch (type) {
-      case 'power':
-        this.platform.getDimmer(this.deviceId,
-          watchDog('getPower', this.platform[priv].timeout, this.platform[priv],
+      case 'position':
+        this.platform.getPosition(this.deviceId,
+          watchDog('getPosition', this.platform[priv].timeout, this.platform[priv],
             (level) => {
               callback(null, !!Number(level));
-            }));
-        break;
-      case 'brightness':
-        this.platform.getDimmer(this.deviceId,
-          watchDog('getBrightness', this.platform[priv].timeout, this.platform[priv],
-            (level) => {
-              this.lastBrightness = parseInt(level, 10) || this.lastBrightness;
-              callback(null, parseInt(level, 10));
             }));
         break;
       default:
@@ -135,57 +126,30 @@ class RadioRAItem {
     }
   }
 
-  setPower(state, callback) {
+  setPosition(state, callback) {
     this.platform[priv].log(
-      `setPower ${this.deviceId} ${state ? 'on' : 'off'} (${this.lastBrightness}%)`
+      `setPosition ${this.deviceId} ${state ? 'on' : 'off'} (${this.lastPercentage}%)`
     );
-    this.platform.setDimmer(
-      this.deviceId, state ? this.lastBrightness : 0,
+    this.platform.setPosition(
+      this.deviceId, state ? this.lastPercentage : 0,
       watchDog('setPower', this.platform[priv].timeout, this.platform[priv], () => callback())
     );
   }
 
-  setBrightness(value, callback) {
-    this.platform[priv].log(
-      `setBrightness ${this.deviceId} ${value}%`
-    );
-    this.lastBrightness = value || this.lastBrightness;
-    this.platform.setDimmer(this.deviceId, value,
-      watchDog('setBrightness', this.platform[priv].timeout, this.platform[priv],
-        () => {
-          if (this.service) {
-            this.disablePowerEvent = true;
-            this.service
-              .getCharacteristic(Characteristic.On)
-              .setValue(Number(value) !== 0, undefined, 'fromSetValue');
-            this.disablePowerEvent = false;
-          }
-          callback();
-        }));
-  }
-
   getServices() {
     const services = [];
-    this.service = new Service.Lightbulb(this.name);
+    this.service = new Service.WindowCovering(this.name);
     this.service.RadioRAItem = this;
 
-    // gets and sets over the remote api
-    this.service.getCharacteristic(Characteristic.On)
-      .on('get', (callback) => { this.get('power', callback); })
+    this.service.getCharacteristic(Characteristic.CurrentPosition)
+      .on('get', (callback) => { this.get('position', callback); })
       .on('set', (value, callback) => {
-        if (!this.disablePowerEvent) {
-          this.setPower(value, callback);
-        } else {
-          callback();
-        }
+        this.setPosition(value, callback);
       });
 
-    if (!this.isSwitch) {
-      this.service.addCharacteristic(Characteristic.Brightness)
-        .on('get', (callback) => { this.get('brightness', callback); })
-        .on('set', (value, callback) => { this.setBrightness(value, callback); });
-    }
-
+    // this.service.getCharacteristic(Characteristic.TargetPosition)
+    // this.service.getCharacteristic(Characteristic.PositionState)
+    
     services.push(this.service);
 
     const service = new Service.AccessoryInformation();
@@ -265,7 +229,7 @@ class RadioRA extends EventEmitter {
     }
   }
 
-  setDimmer(id, level, maybeFade, maybeDelay, maybeCallback) {
+  setPosition(id, level, maybeFade, maybeDelay, maybeCallback) {
     let cb = maybeCallback;
     let delay = maybeDelay;
     let fade = maybeFade;
@@ -295,7 +259,7 @@ class RadioRA extends EventEmitter {
     this.sendCommand(cmd);
   }
 
-  getDimmer(id, callback) {
+  getPosition(id, callback) {
     const numId = Number(id);
     const p = this[priv];
     p.status[numId] = p.status[numId] || {};
@@ -321,13 +285,16 @@ class RadioRA extends EventEmitter {
   }
 
   accessories(callback) {
-    this[priv].log('Fetching RadioRA lights from HomeBridge config..');
     const items = [];
-    for (let i = 0; i < this[priv].config.lights.length; i++) {
-      const rrItem = new RadioRAItem(this.log, this[priv].config.lights[i], this);
+
+    this[priv].log('Fetching RadioRA shades from HomeBridge config...');
+    
+    for (let i = 0; i < this[priv].config.shades.length; i++) {
+      const rrItem = new RadioRAItem(this.log, this[priv].config.shades[i], this);
       items.push(rrItem);
-      this.accessories[this[priv].config.lights[i].id] = rrItem;
+      this.accessories[this[priv].config.shades[i].id] = rrItem;
     }
+
     callback(items);
   }
 }
