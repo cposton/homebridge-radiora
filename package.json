@@ -1,5 +1,5 @@
 {
-  "name": "homebridge-radiora",
+  "name": "homebridge-shady",
   "version": "2.1.2",
   "description": "Homebridge plugin for RadioRA2 from Lutron",
   "main": "build/index.js",
