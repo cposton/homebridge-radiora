@@ -57,6 +57,7 @@ function sendPassword(context, prompt) {
     context.log(`Bad login response /${prompt}/`);
     return;
   }
+  
   context.state = incomingData;
   context.socket.write(`${context.config.password}\r\n`);
 }
@@ -83,7 +84,7 @@ function watchDog(name, maxTime, context, fn) {
     if (!wasDone) {
       wasDone = true;
       dogs--;
-      context.log(`${name} watch dog kicked after ${maxTime} (${dogs})`);
+      context.log(`${name} watch dog told to lay down after ${maxTime} (${dogs})`);
       fn();
     }
   }, maxTime);
@@ -112,27 +113,33 @@ class RadioRAItem {
     this.platform = platform;
   }
 
-  get(type, callback) {
-    switch (type) {
-      case 'position':
-        this.platform.getPosition(this.deviceId,
-          watchDog('getPosition', this.platform[priv].timeout, this.platform[priv],
-            (level) => {
-              callback(null, !!Number(level));
-            }));
-        break;
-      default:
-        throw new Error('Invalid Characteristic requested');
-    }
-  }
+  getPosition(callback) {
+    this.platform[priv].log(`getPosition for device ${this.deviceId}`);
 
-  setPosition(state, callback) {
-    this.platform[priv].log(
-      `setPosition ${this.deviceId} ${state ? 'on' : 'off'} (${this.lastPercentage}%)`
-    );
+    this.platform.getPosition(this.deviceId,
+      watchDog('getPosition', this.platform[priv].timeout, this.platform[priv],
+        (level) => {
+          this.log(`getPosition for device ${this.deviceId} is ${Math.ceil(level)}`)
+          callback(null, Math.ceil(level));
+        }));
+  }
+  setPosition(level, callback) {
+    this.platform[priv].log(`setPosition for device ${this.deviceId} to ${level}%`);
+
     this.platform.setPosition(
-      this.deviceId, state ? this.lastPercentage : 0,
-      watchDog('setPower', this.platform[priv].timeout, this.platform[priv], () => callback())
+      this.deviceId, 
+      level,
+      watchDog('setPosition', this.platform[priv].timeout, this.platform[priv], (response) => {
+        if (response) {
+          callback(null, Math.ceil(response.level));
+        }
+        else {
+          this.platform[priv].log('setPosition received no response data');
+          
+          // Attempt to get the new position
+          this.getPosition(callback);
+        }
+      })
     );
   }
 
@@ -142,13 +149,19 @@ class RadioRAItem {
     this.service.RadioRAItem = this;
 
     this.service.getCharacteristic(Characteristic.CurrentPosition)
-      .on('get', (callback) => { this.get('position', callback); })
+      .on('get', (callback) => {
+        this.getPosition(callback);
+      });
+      
+    this.service.getCharacteristic(Characteristic.TargetPosition)
+      .on('get', (callback) => {
+        this.getPosition(callback);
+      })
       .on('set', (value, callback) => {
         this.setPosition(value, callback);
       });
-
-    // this.service.getCharacteristic(Characteristic.TargetPosition)
-    // this.service.getCharacteristic(Characteristic.PositionState)
+    
+    //Characteristic.PositionState never seemed to be called for anything
     
     services.push(this.service);
 
@@ -190,7 +203,6 @@ class RadioRA extends EventEmitter {
 
     p.socket = net.connect(23, this[priv].config.host);
     p.socket.on('data', (data) => {
-      // p.log.debug(`RECEIVED ${String(data).replace(/\r\n/g, '<br>')}`);
       const str = String(data);
       const parts = str.split('\r\n');
       for (const line of parts) {
@@ -217,14 +229,15 @@ class RadioRA extends EventEmitter {
   sendCommand(command) {
     const p = this[priv];
     let toSend = command;
+    
     if (!/\r\n$/.test(toSend)) {
       toSend += '\r\n';
     }
+
     if (p.ready) {
-      // p.log.debug(`Sending ${toSend.replace(/\r\n/g, '')}`);
       p.socket.write(toSend);
     } else {
-      p.log.debug('Controller not ready, adding command to queue..');
+      p.log.debug('Controller not ready, adding command to queue...');
       p.commandQueue.push(toSend);
     }
   }
@@ -233,6 +246,7 @@ class RadioRA extends EventEmitter {
     let cb = maybeCallback;
     let delay = maybeDelay;
     let fade = maybeFade;
+    
     if (!cb) { cb = delay; delay = null; }
     if (!cb) { cb = fade; fade = null; }
 
@@ -256,25 +270,25 @@ class RadioRA extends EventEmitter {
         cmd += `,${delay}`;
       }
     }
+    
     this.sendCommand(cmd);
   }
 
   getPosition(id, callback) {
     const numId = Number(id);
     const p = this[priv];
+    
     p.status[numId] = p.status[numId] || {};
-    if (!p.status[numId].inProcess && p.status[numId].level) {
-      p.log(`Returning ${p.status[numId].level} from cache`);
-      callback(p.status[numId].level);
-      return;
-    }
+    
     const result = (msg) => {
       if (msg.type === 'status' && numId === msg.id) {
         this.removeListener(MESSAGE_RECEIVED, result);
         callback(parseFloat(msg.level));
       }
     };
+
     this.on(MESSAGE_RECEIVED, result);
+
     if (!p.status[numId].inProcess) {
       p.status[numId].inProcess = true;
       const cmd = `?OUTPUT,${numId}`;
@@ -290,7 +304,7 @@ class RadioRA extends EventEmitter {
     this[priv].log('Fetching RadioRA shades from HomeBridge config...');
     
     for (let i = 0; i < this[priv].config.shades.length; i++) {
-      const rrItem = new RadioRAItem(this.log, this[priv].config.shades[i], this);
+      const rrItem = new RadioRAItem(this[priv].log, this[priv].config.shades[i], this);
       items.push(rrItem);
       this.accessories[this[priv].config.shades[i].id] = rrItem;
     }
